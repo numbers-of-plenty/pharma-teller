@@ -16,6 +16,7 @@ def bytes_to_unicode():
     """
     Returns list of utf-8 byte and a corresponding list of unicode strings.
     """
+    # Base vocabulary
     bs = (
         list(range(ord("!"), ord("~") + 1))
         + list(range(ord("¡"), ord("¬") + 1))
@@ -365,7 +366,7 @@ def main():
     result = generate(model, tokenizer, prompt, max_new_tokens=40, temperature=0)
 
     print("-" * 40)
-    print("MANUAL IMPLEMENTATION OUTPUT:")
+    print("Inefficient RAM output:")
     print(result)
     print("-" * 40)
 

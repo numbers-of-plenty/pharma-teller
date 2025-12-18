@@ -4,12 +4,15 @@ import torch.nn.functional as F
 import json
 import math
 from safetensors.torch import load_file
+from tokenizer import Tokenizer
+from pathlib import Path
 
 # Defined Paths
 MODEL_DIR = "/workspace/Llama-3.2-1B/"
 WEIGHTS_PATH = "/workspace/Llama-3.2-1B/model.safetensors"
 CONFIG_PATH = "/workspace/Llama-3.2-1B/config.json"
 TOKENIZER_JSON = "/workspace/Llama-3.2-1B/tokenizer.json"
+TOKENIZER_MODEL = "/workspace/Llama-3.2-1B/original/tokenizer.model"
 
 
 def bytes_to_unicode():
@@ -33,7 +36,7 @@ def bytes_to_unicode():
     return dict(zip(bs, cs))
 
 
-class LlamaTokenizer:
+class LlamaTokenizerLegacy: # Fast version, not suitable for loss computation
     def __init__(self, json_path):
         print(f"   -> Parsing Tokenizer JSON from {json_path}...")
         with open(json_path, "r", encoding="utf-8") as f:
@@ -109,6 +112,11 @@ class LlamaTokenizer:
         decoded_string = text_bytes.decode("utf-8", errors="replace")
 
         return decoded_string
+    
+
+
+# Implementation copied from Llama repo
+# class LlamaTokenizer: -> copied from llama-models repo a separate file
 
 
 # RoPE
@@ -280,6 +288,10 @@ class LlamaModel(nn.Module):
             config.head_dim, config.max_seq_len, config.rope_theta, config.rope_scaling
         )
 
+        # Move RoPE together with the model
+        self.register_buffer('freqs_cos_buffer', self.freqs_cos)
+        self.register_buffer('freqs_sin_buffer', self.freqs_sin)
+
     def forward(self, tokens):
         B, Seq = tokens.shape
         h = self.embed_tokens(tokens)
@@ -287,8 +299,8 @@ class LlamaModel(nn.Module):
         mask = torch.full((Seq, Seq), float("-inf"), device=tokens.device)
         mask = torch.triu(mask, diagonal=1)
 
-        cos = self.freqs_cos[:Seq].to(tokens.device)
-        sin = self.freqs_sin[:Seq].to(tokens.device)
+        cos = self.freqs_cos_buffer[:Seq]
+        sin = self.freqs_sin_buffer[:Seq]
 
         for layer in self.layers:
             h = layer(h, cos, sin, mask)
@@ -333,6 +345,9 @@ def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
 
 
 def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
     print(f"Loading Config from {CONFIG_PATH}...")
     with open(CONFIG_PATH, "r") as f:
         config_data = json.load(f)
@@ -357,8 +372,14 @@ def main():
     model.load_state_dict(final_state_dict)
     print("   Model loaded successfully.")
 
-    print(f"Initializing Manual Tokenizer from {TOKENIZER_JSON}...")
-    tokenizer = LlamaTokenizer(TOKENIZER_JSON)
+    model = model.to(device)
+    print(f'Moved to {device}')
+
+    # print(f"Initializing Manual Tokenizer from {TOKENIZER_JSON}...")
+    # tokenizer = LlamaTokenizerLegacy(TOKENIZER_JSON)
+
+    # Initialize meta's implementation of the tokenizer
+    tokenizer = Tokenizer(Path(TOKENIZER_MODEL))
 
     # Generation test
     prompt = "The future of AI is"

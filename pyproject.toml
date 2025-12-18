@@ -1,0 +1,12 @@
+[project]
+name = "pharma-teller"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "packaging>=25.0",
+    "safetensors>=0.7.0",
+    "tiktoken>=0.12.0",
+    "torch>=2.9.1",
+]

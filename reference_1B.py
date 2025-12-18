@@ -8,11 +8,11 @@ from tokenizer import Tokenizer
 from pathlib import Path
 
 # Defined Paths
-MODEL_DIR = "/workspace/Llama-3.2-1B/"
-WEIGHTS_PATH = "/workspace/Llama-3.2-1B/model.safetensors"
-CONFIG_PATH = "/workspace/Llama-3.2-1B/config.json"
-TOKENIZER_JSON = "/workspace/Llama-3.2-1B/tokenizer.json"
-TOKENIZER_MODEL = "/workspace/Llama-3.2-1B/original/tokenizer.model"
+MODEL_DIR = "/root/Llama-3.2-1B/"
+WEIGHTS_PATH = "/root/Llama-3.2-1B/model.safetensors"
+CONFIG_PATH = "/root/Llama-3.2-1B/config.json"
+TOKENIZER_JSON = "/root/Llama-3.2-1B/tokenizer.json"
+TOKENIZER_MODEL = "/root/Llama-3.2-1B/original/tokenizer.model"
 
 
 def bytes_to_unicode():
@@ -289,8 +289,8 @@ class LlamaModel(nn.Module):
         )
 
         # Move RoPE together with the model
-        self.register_buffer('freqs_cos_buffer', self.freqs_cos)
-        self.register_buffer('freqs_sin_buffer', self.freqs_sin)
+        self.register_buffer('freqs_cos_buffer', self.freqs_cos, persistent = False)
+        self.register_buffer('freqs_sin_buffer', self.freqs_sin, persistent = False)
 
     def forward(self, tokens):
         B, Seq = tokens.shape
@@ -314,9 +314,10 @@ class LlamaModel(nn.Module):
 
 def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
     model.eval()
-    inputs = tokenizer.encode(prompt, add_bos=True)
-    input_ids = inputs["input_ids"]
+    inputs = tokenizer.encode(prompt, bos = True, eos = False)
+    # input_ids = inputs["input_ids"]
     device = next(model.parameters()).device
+    input_ids = torch.tensor(inputs).unsqueeze(0)
     input_ids = input_ids.to(device)
 
     generated_ids = input_ids.clone()
@@ -338,7 +339,7 @@ def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
 
             generated_ids = torch.cat([generated_ids, next_token], dim=1)
 
-    return tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+    return tokenizer.decode(generated_ids[0].tolist())
 
 
 # Main and Test

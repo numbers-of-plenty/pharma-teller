@@ -8,11 +8,17 @@ from tokenizer import Tokenizer
 from pathlib import Path
 
 # Defined Paths
-MODEL_DIR = "/root/Llama-3.2-1B/"
-WEIGHTS_PATH = "/root/Llama-3.2-1B/model.safetensors"
-CONFIG_PATH = "/root/Llama-3.2-1B/config.json"
-TOKENIZER_JSON = "/root/Llama-3.2-1B/tokenizer.json"
-TOKENIZER_MODEL = "/root/Llama-3.2-1B/original/tokenizer.model"
+MODEL_DIR = "/Users/user895/GIT/Llama-3.2-1B/"
+WEIGHTS_PATH = "/Users/user895/GIT/Llama-3.2-1B/model.safetensors"
+CONFIG_PATH = "/Users/user895/GIT/Llama-3.2-1B/config.json"
+TOKENIZER_JSON = "/Users/user895/GIT/Llama-3.2-1B/tokenizer.json"
+TOKENIZER_MODEL = "/Users/user895/GIT/Llama-3.2-1B/original/tokenizer.model"
+
+# MODEL_DIR = "/root/Llama-3.2-1B/"
+# WEIGHTS_PATH = "/root/Llama-3.2-1B/model.safetensors"
+# CONFIG_PATH = "/root/Llama-3.2-1B/config.json"
+# TOKENIZER_JSON = "/root/Llama-3.2-1B/tokenizer.json"
+# TOKENIZER_MODEL = "/root/Llama-3.2-1B/original/tokenizer.model"
 
 
 def bytes_to_unicode():
@@ -227,7 +233,7 @@ class Attention(nn.Module):
             config.n_heads * config.head_dim, config.dim, bias=False
         )
 
-    def forward(self, x, cos, sin, mask=None):
+    def forward(self, x, cos, sin, mask=None, kv_cache=None):
         B, Seq, _ = x.shape
         xq, xk, xv = self.q_proj(x), self.k_proj(x), self.v_proj(x)
         xq = xq.view(B, Seq, self.n_heads, self.head_dim)
@@ -236,16 +242,24 @@ class Attention(nn.Module):
 
         xq, xk = apply_rotary_emb(xq, xk, cos, sin)
 
+        if kv_cache is not None:
+            cache_k, cache_v = kv_cache
+            xk = torch.cat([cache_k, xk], dim=1)
+            xv = torch.cat([cache_v, xv], dim=1)
+        
+        new_cache = (xk, xv) 
+
         if self.n_rep > 1:
+            B, Seq_kv, _, _ = xk.shape
             xk = (
                 xk.unsqueeze(3)
-                .expand(B, Seq, self.n_kv_heads, self.n_rep, self.head_dim)
-                .reshape(B, Seq, self.n_heads, self.head_dim)
+                .expand(B, Seq_kv, self.n_kv_heads, self.n_rep, self.head_dim)
+                .reshape(B, Seq_kv, self.n_heads, self.head_dim)
             )
             xv = (
                 xv.unsqueeze(3)
-                .expand(B, Seq, self.n_kv_heads, self.n_rep, self.head_dim)
-                .reshape(B, Seq, self.n_heads, self.head_dim)
+                .expand(B, Seq_kv, self.n_kv_heads, self.n_rep, self.head_dim)
+                .reshape(B, Seq_kv, self.n_heads, self.head_dim)
             )
 
         xq, xk, xv = xq.transpose(1, 2), xk.transpose(1, 2), xv.transpose(1, 2)
@@ -256,7 +270,7 @@ class Attention(nn.Module):
         output = torch.matmul(scores, xv)
 
         output = output.transpose(1, 2).contiguous().view(B, Seq, -1)
-        return self.o_proj(output)
+        return self.o_proj(output), new_cache
 
 
 class TransformerBlock(nn.Module):
@@ -267,10 +281,11 @@ class TransformerBlock(nn.Module):
         self.input_layernorm = RMSNorm(config.dim, config.norm_eps)
         self.post_attention_layernorm = RMSNorm(config.dim, config.norm_eps)
 
-    def forward(self, x, cos, sin, mask):
-        x = x + self.self_attn(self.input_layernorm(x), cos, sin, mask)
+    def forward(self, x, cos, sin, mask, kv_cache=None):
+        attn_out, new_cache = self.self_attn(self.input_layernorm(x), cos, sin, mask, kv_cache)
+        x = x + attn_out
         x = x + self.mlp(self.post_attention_layernorm(x))
-        return x
+        return x, new_cache
 
 
 class LlamaModel(nn.Module):
@@ -292,40 +307,69 @@ class LlamaModel(nn.Module):
         self.register_buffer('freqs_cos_buffer', self.freqs_cos, persistent = False)
         self.register_buffer('freqs_sin_buffer', self.freqs_sin, persistent = False)
 
-    def forward(self, tokens):
+    def forward(self, tokens, kv_caches=None, use_cache=False):
         B, Seq = tokens.shape
         h = self.embed_tokens(tokens)
 
-        mask = torch.full((Seq, Seq), float("-inf"), device=tokens.device)
-        mask = torch.triu(mask, diagonal=1)
+        if kv_caches is not None and kv_caches[0] is not None:
+            past_length = kv_caches[0][0].shape[1]
+            cos = self.freqs_cos_buffer[past_length:past_length + Seq]
+            sin = self.freqs_sin_buffer[past_length:past_length + Seq]
+            total_len = past_length + Seq
+            mask = torch.full((Seq, total_len), 0.0, device=tokens.device)
+        else:
+            # No cache, process full sequence
+            cos = self.freqs_cos_buffer[:Seq]
+            sin = self.freqs_sin_buffer[:Seq]
+            mask = torch.full((Seq, Seq), float("-inf"), device=tokens.device)
+            mask = torch.triu(mask, diagonal=1)
 
-        cos = self.freqs_cos_buffer[:Seq]
-        sin = self.freqs_sin_buffer[:Seq]
-
-        for layer in self.layers:
-            h = layer(h, cos, sin, mask)
+        new_caches = [] if use_cache else None
+        
+        for i, layer in enumerate(self.layers):
+            layer_cache = kv_caches[i] if kv_caches is not None else None
+            h, new_cache = layer(h, cos, sin, mask, layer_cache)
+            if use_cache:
+                new_caches.append(new_cache)
 
         h = self.norm(h)
-        return self.lm_head(h)
+        logits = self.lm_head(h)
+        
+        if use_cache:
+            return logits, new_caches
+        return logits
 
 
 # Temporary ineffective generation function
 
 
-def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
+def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7, use_cache=True):
     model.eval()
     inputs = tokenizer.encode(prompt, bos = True, eos = False)
-    # input_ids = inputs["input_ids"]
     device = next(model.parameters()).device
     input_ids = torch.tensor(inputs).unsqueeze(0)
     input_ids = input_ids.to(device)
 
     generated_ids = input_ids.clone()
     print(f"\nGenerating response to: '{prompt}'")
+    print("Generated text: ")
+    print(prompt, end = '', flush = True)
 
+    kv_caches = None
+    
     with torch.no_grad():
         for i in range(max_new_tokens):
-            logits = model(generated_ids)
+            if use_cache:
+                if i == 0:
+                    # Process full prompt on the first iteration
+                    logits, kv_caches = model(generated_ids, kv_caches=None, use_cache=True)
+                else:
+                    # Process only a single token
+                    logits, kv_caches = model(generated_ids[:, -1:], kv_caches=kv_caches, use_cache=True)
+            else:
+                # Process entire sequence when training
+                logits = model(generated_ids)
+                
             next_token_logits = logits[:, -1, :]
 
             if temperature > 0:
@@ -338,7 +382,11 @@ def generate(model, tokenizer, prompt, max_new_tokens=50, temperature=0.7):
                 break
 
             generated_ids = torch.cat([generated_ids, next_token], dim=1)
-
+            
+            token_text = tokenizer.decode([next_token.item()])
+            print(token_text, end="", flush=True)
+    
+    print()
     return tokenizer.decode(generated_ids[0].tolist())
 
 
@@ -384,13 +432,44 @@ def main():
 
     # Generation test
     prompt = "The future of AI is"
-    # Greedy generation is good for the project for now
-    result = generate(model, tokenizer, prompt, max_new_tokens=40, temperature=0)
-
-    print("-" * 40)
-    print("Inefficient RAM output:")
-    print(result)
-    print("-" * 40)
+    
+    # Test with KV-cache
+    import time
+    print("\n" + "=" * 60)
+    print("TESTING WITH KV-CACHE (use_cache=True)")
+    print("=" * 60)
+    start_time = time.time()
+    result_cached = generate(model, tokenizer, prompt, max_new_tokens=200, temperature=0, use_cache=True)
+    time_cached = time.time() - start_time
+    print("-" * 60)
+    print("Output:")
+    print(result_cached)
+    print("-" * 60)
+    print(f"Time taken: {time_cached:.4f} seconds")
+    print("=" * 60)
+    
+    # Test without KV-cache
+    print("\n" + "=" * 60)
+    print("TESTING WITHOUT KV-CACHE (use_cache=False)")
+    print("=" * 60)
+    start_time = time.time()
+    result_no_cache = generate(model, tokenizer, prompt, max_new_tokens=200, temperature=0, use_cache=False)
+    time_no_cache = time.time() - start_time
+    print("-" * 60)
+    print("Output:")
+    print(result_no_cache)
+    print("-" * 60)
+    print(f"Time taken: {time_no_cache:.4f} seconds")
+    print("=" * 60)
+    
+    # Comparison
+    print("\n" + "=" * 60)
+    print("PERFORMANCE COMPARISON")
+    print("=" * 60)
+    print(f"With KV-cache:    {time_cached:.4f} seconds")
+    print(f"Without KV-cache: {time_no_cache:.4f} seconds")
+    print(f"Speedup:          {time_no_cache/time_cached:.2f}x faster with cache")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

@@ -8,17 +8,17 @@ from tokenizer import Tokenizer
 from pathlib import Path
 
 # Defined Paths
-MODEL_DIR = "/Users/user895/GIT/Llama-3.2-1B/"
-WEIGHTS_PATH = "/Users/user895/GIT/Llama-3.2-1B/model.safetensors"
-CONFIG_PATH = "/Users/user895/GIT/Llama-3.2-1B/config.json"
-TOKENIZER_JSON = "/Users/user895/GIT/Llama-3.2-1B/tokenizer.json"
-TOKENIZER_MODEL = "/Users/user895/GIT/Llama-3.2-1B/original/tokenizer.model"
+# MODEL_DIR = "/Users/user895/GIT/Llama-3.2-1B/"
+# WEIGHTS_PATH = "/Users/user895/GIT/Llama-3.2-1B/model.safetensors"
+# CONFIG_PATH = "/Users/user895/GIT/Llama-3.2-1B/config.json"
+# TOKENIZER_JSON = "/Users/user895/GIT/Llama-3.2-1B/tokenizer.json"
+# TOKENIZER_MODEL = "/Users/user895/GIT/Llama-3.2-1B/original/tokenizer.model"
 
-# MODEL_DIR = "/root/Llama-3.2-1B/"
-# WEIGHTS_PATH = "/root/Llama-3.2-1B/model.safetensors"
-# CONFIG_PATH = "/root/Llama-3.2-1B/config.json"
-# TOKENIZER_JSON = "/root/Llama-3.2-1B/tokenizer.json"
-# TOKENIZER_MODEL = "/root/Llama-3.2-1B/original/tokenizer.model"
+MODEL_DIR = "/root/Llama-3.2-1B/"
+WEIGHTS_PATH = "/root/Llama-3.2-1B/model.safetensors"
+CONFIG_PATH = "/root/Llama-3.2-1B/config.json"
+TOKENIZER_JSON = "/root/Llama-3.2-1B/tokenizer.json"
+TOKENIZER_MODEL = "/root/Llama-3.2-1B/original/tokenizer.model"
 
 
 def bytes_to_unicode():
@@ -439,7 +439,7 @@ def main():
     print("TESTING WITH KV-CACHE (use_cache=True)")
     print("=" * 60)
     start_time = time.time()
-    result_cached = generate(model, tokenizer, prompt, max_new_tokens=200, temperature=0, use_cache=True)
+    result_cached = generate(model, tokenizer, prompt, max_new_tokens=100, temperature=0, use_cache=True)
     time_cached = time.time() - start_time
     print("-" * 60)
     print("Output:")
@@ -453,7 +453,7 @@ def main():
     print("TESTING WITHOUT KV-CACHE (use_cache=False)")
     print("=" * 60)
     start_time = time.time()
-    result_no_cache = generate(model, tokenizer, prompt, max_new_tokens=200, temperature=0, use_cache=False)
+    result_no_cache = generate(model, tokenizer, prompt, max_new_tokens=100, temperature=0, use_cache=False)
     time_no_cache = time.time() - start_time
     print("-" * 60)
     print("Output:")
@@ -462,13 +462,30 @@ def main():
     print(f"Time taken: {time_no_cache:.4f} seconds")
     print("=" * 60)
     
-    # Comparison
     print("\n" + "=" * 60)
-    print("PERFORMANCE COMPARISON")
+    print("Testing a compiled model")
     print("=" * 60)
-    print(f"With KV-cache:    {time_cached:.4f} seconds")
-    print(f"Without KV-cache: {time_no_cache:.4f} seconds")
-    print(f"Speedup:          {time_no_cache/time_cached:.2f}x faster with cache")
+    model = torch.compile(model, mode="default", fullgraph=False)
+    print('warm-up')   
+    _ = generate(model, tokenizer, "Warmup", max_new_tokens=5, temperature=0, use_cache=True)
+    _ = generate(model, tokenizer, "Warmup", max_new_tokens=5, temperature=0, use_cache=False) 
+    start_time = time.time()
+    result_compiled = generate(model, tokenizer, prompt, max_new_tokens=100, temperature=0, use_cache=True)
+    time_compiled = time.time() - start_time
+    print("-" * 60)
+    print("Output:")
+    print(result_compiled)
+    print("-" * 60)
+    print(f"Time taken: {time_compiled:.4f} seconds")
+    print("=" * 60)
+    start_time = time.time()
+    result_compiled = generate(model, tokenizer, prompt, max_new_tokens=100, temperature=0, use_cache=True)
+    time_compiled = time.time() - start_time
+    print("-" * 60)
+    print("Output:")
+    print(result_compiled)
+    print("-" * 60)
+    print(f"Time taken: {time_compiled:.4f} seconds")
     print("=" * 60)
 
 

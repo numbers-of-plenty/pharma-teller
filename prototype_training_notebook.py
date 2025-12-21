@@ -175,7 +175,6 @@ train_loader = DataLoader(
 scaler = GradScaler()
 losses = []
 
-# print('overfitting a small batch')
 for i, batch in tqdm(enumerate(train_loader), total = len(train_loader)):
     input_ids, loss_masks = tokenize_batch(batch)
 
